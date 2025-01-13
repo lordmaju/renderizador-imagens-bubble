@@ -1,45 +1,29 @@
-const puppeteer = require('puppeteer'); // Para capturar páginas
-const express = require('express'); // Para criar o servidor
+const puppeteer = require('puppeteer');
+const express = require('express');
+const async = require('async'); // Importa o pacote async
 const app = express();
 
-// Permite receber JSON no body da requisição
-app.use(express.json());
+// Cria uma fila com um número máximo de 1 tarefa executada de cada vez
+const queue = async.queue(async (task, done) => {
+    console.log('Processando solicitação:', task.url);  // Log para saber qual solicitação está sendo processada
 
-// Endpoint para renderizar e capturar o elemento específico
-app.post('/render', async (req, res) => {
-    const { url } = req.body;
-    
-    console.log('Solicitação recebida para renderizar a URL:', url);  // Log da solicitação recebida
-
-    if (!url) {
-        console.log('Erro: URL não fornecida');  // Log de erro caso a URL não seja fornecida
-        return res.status(400).json({ error: 'URL é necessária!' });
-    }
+    const { url, res } = task;
 
     try {
-        console.log('Iniciando o navegador Puppeteer...');
         const browser = await puppeteer.launch({
-            args: ['--no-sandbox', '--disable-setuid-sandbox'], 
+            args: ['--no-sandbox', '--disable-setuid-sandbox'],
             headless: true,
-            timeout: 90000 // Aumentando o tempo limite para 90 segundos
+            timeout: 90000
         });
-        
-        const page = await browser.newPage();
-        console.log('Abertura da nova página no Puppeteer');
 
-        // Define uma viewport inicial (ajuda no carregamento da página)
+        const page = await browser.newPage();
         await page.setViewport({ width: 1500, height: 1500 });
 
-        console.log('Navegando para a URL:', url);
-        await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 }); // Aumentando o timeout para 90 segundos
+        await page.goto(url, { waitUntil: 'networkidle0', timeout: 90000 });
 
-        const elementSelector = '#templete'; // Seletor do elemento que será capturado
-        console.log('Aguardando o seletor do elemento:', elementSelector);
-        
-        // Aguardar o elemento aparecer
-        await page.waitForSelector(elementSelector); 
+        const elementSelector = '#templete';
+        await page.waitForSelector(elementSelector);
 
-        // Ajusta o tamanho do elemento para 1500x1500 pixels
         await page.evaluate((selector) => {
             const element = document.querySelector(selector);
             if (element) {
@@ -48,20 +32,39 @@ app.post('/render', async (req, res) => {
             }
         }, elementSelector);
 
-        // Captura somente o elemento especificado
-        const element = await page.$(elementSelector); 
-        const screenshot = await element.screenshot({ type: 'png', encoding: 'base64' }); 
+        const element = await page.$(elementSelector);
+        const screenshot = await element.screenshot({ type: 'png', encoding: 'base64' });
 
-        console.log('Imagem capturada com sucesso!');
-        await browser.close(); 
+        await browser.close();
 
-        // Retorna a imagem em base64
         res.json({ image: `data:image/png;base64,${screenshot}` });
-
     } catch (error) {
-        console.error('Erro durante a renderização:', error); // Log do erro
+        console.error('Erro durante a renderização:', error);
         res.status(500).json({ error: 'Erro ao renderizar o elemento.' });
     }
+
+    done();  // Chama o done para indicar que a tarefa foi concluída
+}, 1);  // Limitando a fila para processar 1 tarefa por vez
+
+// Permite receber JSON no body da requisição
+app.use(express.json());
+
+// Endpoint para renderizar e capturar o elemento específico
+app.post('/render', (req, res) => {
+    const { url } = req.body;
+
+    console.log('Solicitação recebida para renderizar a URL:', url);
+
+    if (!url) {
+        console.log('Erro: URL não fornecida');
+        return res.status(400).json({ error: 'URL é necessária!' });
+    }
+
+    // Adiciona a tarefa na fila
+    queue.push({ url, res });
+
+    // Log para saber que a solicitação foi enfileirada
+    console.log('Solicitação enfileirada para processamento:', url);
 });
 
 // Configura a porta do servidor
